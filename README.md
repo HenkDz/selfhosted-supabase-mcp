@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/henkdz-selfhosted-supabase-mcp-badge.png)](https://mseep.ai/app/henkdz-selfhosted-supabase-mcp)
+
 # Self-Hosted Supabase MCP Server
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
