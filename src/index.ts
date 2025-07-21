@@ -33,6 +33,16 @@ import listStorageBucketsTool from './tools/list_storage_buckets.js';
 import listStorageObjectsTool from './tools/list_storage_objects.js';
 import listRealtimePublicationsTool from './tools/list_realtime_publications.js';
 
+// Authentication framework imports
+import { 
+    AuthenticationMiddleware, 
+    AuditLogger, 
+    type AuthConfig, 
+    type AuthContext,
+    AuthenticationError,
+    AuthorizationError
+} from './auth/index.js';
+
 // Node.js built-in modules
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -69,6 +79,8 @@ async function main() {
         .option('--jwt-secret <secret>', 'Supabase JWT secret (optional, needed for some tools)', process.env.SUPABASE_AUTH_JWT_SECRET)
         .option('--workspace-path <path>', 'Workspace root path (for file operations)', process.cwd())
         .option('--tools-config <path>', 'Path to a JSON file specifying which tools to enable (e.g., { "enabledTools": ["tool1", "tool2"] }). If omitted, all tools are enabled.')
+        .option('--auth-token <token>', 'JWT token for authentication (optional)', process.env.MCP_AUTH_TOKEN)
+        .option('--disable-auth', 'Disable authentication (NOT RECOMMENDED for production)', false)
         .parse(process.argv);
 
     const options = program.opts();
@@ -94,6 +106,31 @@ async function main() {
         });
 
         console.error('Supabase client initialized successfully.');
+
+        // Initialize authentication framework
+        let authMiddleware: AuthenticationMiddleware | null = null;
+        let auditLogger: AuditLogger | null = null;
+
+        if (!options.disableAuth && options.jwtSecret) {
+            console.error('Initializing authentication framework...');
+            
+            const authConfig: AuthConfig = {
+                jwtSecret: options.jwtSecret,
+                sessionTimeout: 24 * 60 * 60 * 1000, // 24 hours
+                maxConcurrentSessions: 5,
+                enableAuditLogging: true,
+                allowedAudiences: ['mcp-server', 'supabase'],
+                allowedIssuers: ['supabase'],
+                requireHumanApproval: ['delete_auth_user', 'apply_migration'],
+            };
+
+            authMiddleware = new AuthenticationMiddleware(authConfig);
+            auditLogger = new AuditLogger(true);
+            
+            console.error('Authentication framework initialized successfully.');
+        } else {
+            console.error('WARNING: Authentication is disabled. This is NOT RECOMMENDED for production use.');
+        }
 
         const availableTools = {
             // Cast here assumes tools will implement AppTool structure
@@ -239,10 +276,56 @@ async function main() {
                     parsedArgs = (tool.inputSchema as z.ZodTypeAny).parse(request.params.arguments);
                 }
 
+                // Create authentication context
+                let authContext: AuthContext;
+                
+                if (authMiddleware && options.authToken && !options.disableAuth) {
+                    try {
+                        authContext = await authMiddleware.authenticateToken(options.authToken);
+                        
+                        // Validate tool access
+                        await authMiddleware.validateToolAccess(authContext, toolName, parsedArgs as Record<string, unknown>);
+                        
+                        // Log successful authentication and authorization
+                        if (auditLogger) {
+                            await auditLogger.logToolEvent(toolName, 'success', authContext, {
+                                toolArgs: parsedArgs,
+                            });
+                        }
+                    } catch (error) {
+                        // Log authentication/authorization failure
+                        if (auditLogger) {
+                            await auditLogger.logAuthEvent(
+                                'tool_access_denied',
+                                'failure',
+                                undefined,
+                                { 
+                                    toolName, 
+                                    error: error instanceof Error ? error.message : String(error) 
+                                }
+                            );
+                        }
+                        throw error;
+                    }
+                } else {
+                    // Create anonymous context for backward compatibility
+                    authContext = authMiddleware?.createAnonymousContext() || {
+                        sessionId: 'anonymous',
+                        roles: ['anon'],
+                        permissions: [],
+                        isAuthenticated: false,
+                    };
+
+                    if (!options.disableAuth) {
+                        console.error(`WARNING: No authentication token provided for tool ${toolName}. Using anonymous context with limited permissions.`);
+                    }
+                }
+
                 // Create the context object using the imported type
                 const context: ToolContext = {
                     selfhostedClient,
                     workspacePath: options.workspacePath as string,
+                    auth: authContext,
                     log: (message, level = 'info') => {
                         // Simple logger using console.error (consistent with existing logs)
                         console.error(`[${level.toUpperCase()}] ${message}`);
@@ -263,9 +346,22 @@ async function main() {
                 };
             } catch (error: unknown) {
                  console.error(`Error executing tool ${toolName}:`, error);
+                 
+                 // Log tool execution failure
+                 if (auditLogger && authMiddleware) {
+                     const authContext = authMiddleware.createAnonymousContext();
+                     await auditLogger.logToolEvent(toolName, 'error', authContext, {
+                         error: error instanceof Error ? error.message : String(error),
+                     });
+                 }
+                 
                  let errorMessage = `Error executing tool ${toolName}: `;
                  if (error instanceof z.ZodError) {
                      errorMessage += `Input validation failed: ${error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')}`;
+                 } else if (error instanceof AuthenticationError) {
+                     errorMessage += `Authentication failed: ${error.message}`;
+                 } else if (error instanceof AuthorizationError) {
+                     errorMessage += `Access denied: ${error.message}`;
                  } else if (error instanceof Error) {
                      errorMessage += error.message;
                  } else {
@@ -282,6 +378,15 @@ async function main() {
         const transport = new StdioServerTransport();
         await server.connect(transport);
         console.error('MCP Server connected to stdio.');
+
+        // Cleanup handler
+        process.on('SIGINT', () => {
+            console.error('Shutting down MCP Server...');
+            if (authMiddleware) {
+                authMiddleware.destroy();
+            }
+            process.exit(0);
+        });
 
     } catch (error) {
         console.error('Failed to initialize or start the MCP server:', error);
