@@ -68,11 +68,12 @@ export async function executeSqlWithFallback(
 ): Promise<SqlExecutionResult> {
     // Try direct database connection first (bypasses JWT authentication)
     if (client.isPgAvailable()) {
-        console.info('Using direct database connection (bypassing JWT)...');
+        // console.info('Using direct database connection (bypassing JWT)...');
         return await client.executeSqlWithPg(sql);
     }
     
     // Fallback to RPC if direct connection not available
     console.info('Falling back to RPC method...');
     return await client.executeSqlViaRpc(sql, readOnly);
+
 } 
