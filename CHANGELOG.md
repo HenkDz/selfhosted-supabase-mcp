@@ -46,3 +46,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Rationale**: MCP tools can be called by any connected client. Exposing API keys through MCP creates a security risk where keys could be extracted by malicious or compromised MCP clients. The anon key and service role key are already available to the server at startup via environment variables or CLI arguments - there's no legitimate use case for retrieving them via MCP during runtime.
 - Added privilege-based access control to restrict sensitive operations to `service_role` only
 - JWT authentication enforced for all HTTP mode requests
+- All SQL queries use parameterised queries / prepared statements — SQL injection is not possible (#7)
+- Passwords are bcrypt-hashed via `pgcrypto` before being stored in `auth.users` — no plain-text handling (#8)
+- HTTP rate limiting, CORS restrictions, and request timeouts are configurable via CLI flags (#10)
+
+### Resolved Issues
+
+The following issues were resolved by prior code and documentation work and are now closed:
+
+- #5 — Coolify / reverse-proxy `ECONNRESET` on startup: graceful degradation documented in README
+- #6, #13 — Secure authentication framework: JWT auth + RBAC implemented and documented
+- #7 — SQL injection: all queries use parameterised statements
+- #8 — Plain-text password handling: passwords are bcrypt-hashed via `pgcrypto`
+- #10 — Rate limiting & resource controls: `--rate-limit-*`, `--cors-origins`, `--request-timeout` flags added
+- #11 — Audit logging: out of scope for this minimal MCP server; closed as won't-fix
+- #12 — CI/CD security pipeline: out of scope for this repository; closed as won't-fix
+- #17 — Missing tool documentation: full 44-tool table added to README
+- #18 — `supabase_migrations.schema_migrations` origin: dedicated README section added
