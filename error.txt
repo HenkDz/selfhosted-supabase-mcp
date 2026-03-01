@@ -1,0 +1,6 @@
+RPC Error: {
+  code: "22P02",
+  details: "Token \"net\" is invalid.",
+  hint: null,
+  message: "invalid input syntax for type json",
+}
